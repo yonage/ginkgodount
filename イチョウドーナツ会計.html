@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>イチョウドーナツ会計</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;700;900&display=swap');
+        body { font-family: 'M PLUS Rounded 1c', sans-serif; background-color: #fdf6e3; color: #4338ca; overflow-x: hidden; }
+        .product-card:active { transform: scale(0.95); }
+        .dice-btn:active { transform: translateY(2px); box-shadow: none; }
+        .correction-active { animation: pulse 1s infinite; }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+            100% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+
+        // 【重要】ここにデプロイしたGASのURLを貼り付けてください
+        const GAS_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzioz8bQ0Lll9jFnPcmD0_DKn0gCURQ0h578dTDZri1dULAEGUUsJvIHWhsSv6RotRq/exec"; 
+        
+        const DONUTS = [
+            { id: 'plain', name: "プレーン", color: "bg-amber-100", textColor: "text-amber-900" },
+            { id: 'cocoa', name: "ココア", color: "bg-orange-950", textColor: "text-white" },
+            { id: 'choco', name: "チョコ", color: "bg-orange-400", textColor: "text-yellow-950" },
+            { id: 'matcha', name: "抹茶", color: "bg-green-700", textColor: "text-white" },
+        ];
+
+        const calculateChinchiro = (dice, currentPrice) => {
+            if (dice.length < 3) return { label: "サイコロを入力...", price: currentPrice, isSpecial: false };
+            
+            const s = [...dice].sort();
+            const [d1, d2, d3] = s;
+            let specialPrice = currentPrice;
+            let label = "役なし";
+
+            if (d1 === 1 && d2 === 1 && d3 === 1) {
+                specialPrice = 50;
+                label = "【役】ピンゾロ";
+            } else if (d1 === d2 && d2 === d3) {
+                specialPrice = 100;
+                label = `【役】ゾロ目 (${d1})`;
+            } else if (d1 === 4 && d2 === 5 && d3 === 6) {
+                specialPrice = 200;
+                label = "【役】シゴロ";
+            } else if (d1 === d2 || d2 === d3) {
+                specialPrice = 300;
+                label = `【目】${d1 === d2 ? d3 : d1}`;
+            }
+
+            const finalPrice = Math.min(specialPrice, currentPrice);
+            const isApplied = finalPrice < currentPrice;
+
+            return { 
+                label: label + (isApplied ? "" : " (定価)"), 
+                price: finalPrice, 
+                isSpecial: isApplied 
+            };
+        };
+
+        function App() {
+            const [cart, setCart] = useState({});
+            const [diceResult, setDiceResult] = useState([]);
+            const [serverData, setServerData] = useState({ currentPrice: 400, activeDay: "読込中...", totalSold: 0 });
+            const [isSyncing, setIsSyncing] = useState(false);
+            const [error, setError] = useState(null);
+            const [lastTransaction, setLastTransaction] = useState(null);
+            const [message, setMessage] = useState("");
+            const [isCorrectionConfirming, setIsCorrectionConfirming] = useState(false);
+
+            const chinchiro = calculateChinchiro(diceResult, serverData.currentPrice);
+            const totalItemsInCart = Object.values(cart).reduce((sum, i) => sum + i.qty, 0);
+            const finalPricePerUnit = chinchiro.price;
+            const totalPrice = totalItemsInCart * finalPricePerUnit;
+
+            const [pendingTransactions, setPendingTransactions] = useState(() => {
+            // 初期化時にlocalStorageから読み込む
+            const saved = localStorage.getItem('pending_donuts');
+            return saved ? JSON.parse(saved) : [];
+            });
+
+            const fetchData = useCallback(async () => {
+                if (!GAS_WEBAPP_URL || GAS_WEBAPP_URL.includes("ここに")) return;
+                setIsSyncing(true);
+                try {
+                    const res = await fetch(`${GAS_WEBAPP_URL}?t=${Date.now()}`);
+                    const data = await res.json();
+                    if (data.activeDay) {
+                        setServerData(data);
+                        setError(null);
+                    }
+                } catch (e) {
+                    setError("サーバー接続エラー（デモモード中）");
+                } finally {
+                    setIsSyncing(false);
+                }
+            }, []);
+
+            useEffect(() => {
+                fetchData();
+                const timer = setInterval(fetchData, 30000);
+                return () => clearInterval(timer);
+            }, [fetchData]);
+
+            const addToCart = (donut) => {
+                setCart(prev => ({
+                    ...prev,
+                    [donut.id]: { ...donut, qty: (prev[donut.id]?.qty || 0) + 1 }
+                }));
+            };
+
+            const removeFromCart = (e, donutId) => {
+                e.stopPropagation(); // 親ボタンのクリックイベント（追加）を防止
+                setCart(prev => {
+                    const currentQty = prev[donutId]?.qty || 0;
+                    if (currentQty <= 0) return prev;
+                    
+                    const newCart = { ...prev };
+                    if (currentQty === 1) {
+                        delete newCart[donutId];
+                    } else {
+                        newCart[donutId] = { ...prev[donutId], qty: currentQty - 1 };
+                    }
+                    return newCart;
+                });
+            };
+
+            const handleCheckout = async () => {
+                if (totalItemsInCart === 0 || diceResult.length < 3) return;
+                
+                const timestamp = new Date().toLocaleString('ja-JP');
+                const transactionData = {
+                    deviceId: "Terminal-01",
+                    transactions: Object.values(cart).map(item => ({
+                        timestamp,
+                        name: item.name,
+                        finalPrice: finalPricePerUnit,
+                        quantity: item.qty,
+                        diceRoll: diceResult.join(','),
+                        isCorrection: false
+                    }))
+                };
+
+                setIsSyncing(true);
+                try {
+                    // fetchのタイムアウトを考慮し、短時間でレスポンスがない場合はエラーへ
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+                    await fetch(GAS_WEBAPP_URL, {
+                        method: "POST",
+                        mode: "no-cors",
+                        body: JSON.stringify(transactionData),
+                        signal: controller.signal
+                    });
+                    
+                    clearTimeout(timeoutId);
+                    setMessage("会計を送信しました");
+                } catch (e) {
+                    // 【ここがポイント】失敗したらローカルに保存
+                    const newPending = [...pendingTransactions, transactionData];
+                    setPendingTransactions(newPending);
+                    localStorage.setItem('pending_donuts', JSON.stringify(newPending));
+                    setMessage("オフラインのため、端末に保存しました");
+                } finally {
+                    setLastTransaction(transactionData);
+                    setCart({});
+                    setDiceResult([]);
+                    setIsSyncing(false);
+                    setTimeout(() => setMessage(""), 5000);
+                }
+            };
+
+            useEffect(() => {
+                const syncPendingData = async () => {
+                    if (pendingTransactions.length === 0 || !navigator.onLine) return;
+
+                    console.log("未送信データの同期を開始...");
+                    const remaining = [...pendingTransactions];
+                    const target = remaining.shift(); // 先頭のデータを取り出す
+
+                    try {
+                        await fetch(GAS_WEBAPP_URL, {
+                            method: "POST",
+                            mode: "no-cors",
+                            body: JSON.stringify(target)
+                        });
+                        // 成功したらステートとlocalStorageを更新
+                        setPendingTransactions(remaining);
+                        localStorage.setItem('pending_donuts', JSON.stringify(remaining));
+                    } catch (e) {
+                        console.error("再送失敗");
+                    }
+                };
+
+                const timer = setInterval(syncPendingData, 10000); // 10秒ごとにチェック
+                return () => clearInterval(timer);
+            }, [pendingTransactions]);
+
+            const handleVoid = async () => {
+                if (!lastTransaction) return;
+
+                // 2段階確認の1段目
+                if (!isCorrectionConfirming) {
+                    setIsCorrectionConfirming(true);
+                    setTimeout(() => setIsCorrectionConfirming(false), 5000); // 5秒で解除
+                    return;
+                }
+
+                const voidData = {
+                    deviceId: "Terminal-01",
+                    transactions: lastTransaction.transactions.map(t => ({
+                        ...t,
+                        timestamp: new Date().toLocaleString('ja-JP') + " (訂正)",
+                        quantity: -t.quantity,
+                        isCorrection: true
+                    }))
+                };
+
+                setIsSyncing(true);
+                setIsCorrectionConfirming(false);
+                try {
+                    // 送信
+                    await fetch(GAS_WEBAPP_URL, {
+                        method: "POST",
+                        mode: "no-cors",
+                        body: JSON.stringify(voidData)
+                    });
+                    
+                    setLastTransaction(null);
+                    setMessage("訂正を送信しました");
+                    setTimeout(() => setMessage(""), 5000);
+                    setTimeout(fetchData, 2000);
+                } catch (e) {
+                    setError("訂正の送信に失敗しました。");
+                } finally {
+                    setIsSyncing(false);
+                }
+            };
+
+            return (
+                <div className="min-h-screen flex flex-col p-4 md:p-8 max-w-5xl mx-auto">
+                    {}
+                    {error && <div className="fixed top-0 left-0 w-full bg-red-500 text-white text-center py-1 text-xs z-50">{error}</div>}
+                    {message && <div className="fixed top-4 right-4 bg-green-600 text-white px-6 py-3 rounded-2xl shadow-2xl z-50 animate-bounce">{message}</div>}
+
+                    <header className="flex justify-between items-start mb-6">
+                        <div>
+                            <h1 className="text-3xl font-black text-amber-900 flex items-center gap-2">
+                                <i className="fa-solid fa-donut text-orange-500"></i> ドーナツ会計
+                            </h1>
+                            <span className="inline-block bg-amber-900 text-white px-3 py-1 rounded-full text-xs font-bold mt-2">
+                                {serverData.activeDay}設定中
+                            </span>
+                        </div>
+                        <div className="text-right">
+                            <p className="text-amber-700 font-bold text-sm">現在の定価: ¥{serverData.currentPrice}</p>
+                            <button onClick={fetchData} className={`mt-2 w-10 h-10 rounded-full bg-white shadow-md flex items-center justify-center text-amber-900 border border-amber-100 ${isSyncing ? 'animate-spin' : ''}`}>
+                                <i className="fa-solid fa-arrows-rotate"></i>
+                            </button>
+                        </div>
+                    </header>
+
+                    <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 mb-12">
+                        {}
+                        <div className="lg:col-span-8 space-y-8">
+                            <section>
+                                <h2 className="text-xs font-black text-amber-900 mb-3 opacity-60">1. 商品を選択</h2>
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                                    {DONUTS.map(donut => (
+                                        <div key={donut.id} className="relative">
+                                            <button onClick={() => addToCart(donut)} className={`${donut.color} ${donut.textColor} product-card w-full h-28 rounded-3xl shadow-lg flex flex-col items-center justify-center relative border-4 border-transparent hover:border-white transition-all`}>
+                                                <span className="text-lg font-black">{donut.name}</span>
+                                                {cart[donut.id] && (
+                                                    <div className="absolute -top-2 -right-2 bg-white text-amber-900 w-8 h-8 rounded-full flex items-center justify-center font-black shadow-md border-2 border-amber-100">
+                                                        {cart[donut.id].qty}
+                                                    </div>
+                                                )}
+                                            </button>
+                                            
+                                            {}
+                                            {cart[donut.id] && (
+                                                <button 
+                                                    onClick={(e) => removeFromCart(e, donut.id)}
+                                                    className="absolute -bottom-2 -right-2 bg-red-500 text-white w-8 h-8 rounded-full flex items-center justify-center shadow-lg border-2 border-white hover:bg-red-600 active:scale-90 transition-all z-10"
+                                                >
+                                                    <i className="fa-solid fa-minus text-xs"></i>
+                                                </button>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </section>
+
+                            <section className="bg-white p-6 rounded-[2.5rem] shadow-xl border-4 border-amber-50">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h2 className="text-xs font-black text-amber-900 opacity-60">2. チンチロ</h2>
+                                    <button onClick={() => setDiceResult([])} className="text-xs bg-amber-100 text-amber-900 px-3 py-1 rounded-full font-bold">リセット</button>
+                                </div>
+                                <div className="flex justify-center gap-4 mb-6">
+                                    {[0, 1, 2].map(idx => (
+                                        <div key={idx} className={`w-16 h-16 rounded-2xl bg-amber-50 border-4 ${diceResult[idx] ? 'border-amber-400' : 'border-dashed border-amber-200'} flex items-center justify-center text-3xl shadow-inner`}>
+                                            {diceResult[idx] ? <i className={`fa-solid fa-dice-${['one','two','three','four','five','six'][diceResult[idx]-1]} text-amber-900`}></i> : ""}
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="grid grid-cols-6 gap-2">
+                                    {[1, 2, 3, 4, 5, 6].map(num => (
+                                        <button key={num} onClick={() => setDiceResult(prev => prev.length >= 3 ? [num] : [...prev, num])} className="dice-btn h-14 rounded-2xl bg-amber-500 text-white flex items-center justify-center hover:bg-amber-600 shadow-[0_4px_0_rgb(180,83,9)] transition-all">
+                                            <i className={`fa-solid fa-dice-${['one','two','three','four','five','six'][num-1]} text-xl`}></i>
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className={`mt-6 p-4 rounded-3xl text-center transition-all ${chinchiro.isSpecial ? 'bg-orange-100 ring-4 ring-orange-200' : 'bg-amber-50'}`}>
+                                    <div className="text-xs font-bold text-amber-700 mb-1">{chinchiro.label}</div>
+                                    <div className="text-2xl font-black text-amber-900">適用単価: ¥{chinchiro.price}</div>
+                                </div>
+                            </section>
+                        </div>
+
+                        {}
+                        <div className="lg:col-span-4 space-y-4">
+                            <aside className="bg-amber-900 text-amber-50 p-6 rounded-[2.5rem] shadow-2xl">
+                                <h2 className="text-lg font-black mb-4 border-b border-amber-800 pb-2">注文内容</h2>
+                                <div className="space-y-3 mb-6 max-h-60 overflow-y-auto pr-2">
+                                    {Object.values(cart).map(item => (
+                                        <div key={item.id} className="flex justify-between items-center text-sm">
+                                            <span>{item.name} × {item.qty}</span>
+                                            <span className="font-bold font-mono">¥{item.qty * finalPricePerUnit}</span>
+                                        </div>
+                                    ))}
+                                    {totalItemsInCart === 0 && <p className="opacity-40 text-center py-6 text-xs italic">注文待機中...</p>}
+                                </div>
+                                <div className="border-t border-amber-800 pt-4 mb-6">
+                                    <div className="flex justify-between items-end">
+                                        <span className="text-xs opacity-70 font-bold">合計金額</span>
+                                        <span className="text-4xl font-black text-orange-400">¥{totalPrice}</span>
+                                    </div>
+                                </div>
+                                <button onClick={handleCheckout} disabled={totalItemsInCart === 0 || diceResult.length < 3 || isSyncing} className="w-full py-5 rounded-2xl bg-orange-500 hover:bg-orange-600 disabled:opacity-30 text-white font-black text-xl shadow-lg transition-all active:scale-95">
+                                    {isSyncing ? <i className="fa-solid fa-spinner animate-spin"></i> : "会計を確定"}
+                                </button>
+                            </aside>
+
+                            {/* 訂正ボタン（2段階確認方式） */}
+                            {lastTransaction && (
+                                <button 
+                                    onClick={handleVoid}
+                                    className={`w-full py-4 rounded-2xl font-bold text-sm transition-all flex items-center justify-center gap-2 border-2 ${
+                                        isCorrectionConfirming 
+                                        ? 'bg-red-500 text-white border-red-600 correction-active' 
+                                        : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
+                                    }`}
+                                >
+                                    <i className="fa-solid fa-eraser"></i> 
+                                    {isCorrectionConfirming ? '【最終確認】もう一度押して訂正実行' : '直前の会計を訂正する'}
+                                </button>
+                            )}
+                        </div>
+                    </main>
+
+                    {}
+                    <footer className="mt-auto pt-8 pb-4 text-center">
+                        <div className="inline-flex flex-col items-center gap-1">
+                            <div className="px-4 py-2 bg-white rounded-full shadow-sm border border-amber-100 flex items-center gap-2">
+                                <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                                <span className="text-xs font-black text-amber-900">
+                                    {serverData.activeDay} 本日の累計販売数: <span className="text-lg">{serverData.totalSold}</span> 個
+                                </span>
+                            </div>
+                            {pendingTransactions.length > 0 && (
+                                <div className="mt-4 px-4 py-2 bg-red-100 text-red-700 rounded-xl text-xs font-bold border border-red-200">
+                                    <i className="fa-solid fa-cloud-arrow-up mr-2"></i>
+                                    未送信のデータが {pendingTransactions.length} 件あります（接続復帰時に送信されます）
+                                </div>
+                            )}
+                        </div>
+                    </footer>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
