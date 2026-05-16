@@ -157,7 +157,7 @@
                 try {
                     // fetchのタイムアウトを考慮し、短時間でレスポンスがない場合はエラーへ
                     const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), 5000);
+                    const timeoutId = setTimeout(() => controller.abort(), 2000);
 
                     await fetch(GAS_WEBAPP_URL, {
                         method: "POST",
@@ -179,7 +179,7 @@
                     setCart({});
                     setDiceResult([]);
                     setIsSyncing(false);
-                    setTimeout(() => setMessage(""), 5000);
+                    setTimeout(() => setMessage(""), 2000);
                 }
             };
 
@@ -215,7 +215,7 @@
                 // 2段階確認の1段目
                 if (!isCorrectionConfirming) {
                     setIsCorrectionConfirming(true);
-                    setTimeout(() => setIsCorrectionConfirming(false), 5000); // 5秒で解除
+                    setTimeout(() => setIsCorrectionConfirming(false), 2000); // 5秒で解除
                     return;
                 }
 
